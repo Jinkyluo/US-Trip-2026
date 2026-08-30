@@ -55,8 +55,72 @@
 }
 </style>
 
+<script>
+(function(){
+  try{
+    if(localStorage.getItem('us-trip-2026-auth')==='ok'){
+      document.documentElement.classList.add('auth-ok');
+    }else{
+      document.documentElement.classList.add('auth-locked');
+    }
+  }catch(e){
+    document.documentElement.classList.add('auth-locked');
+  }
+})();
+</script>
+<style id="site-auth-styles">
+html.auth-locked body{overflow:hidden}
+html.auth-locked body> :not(#siteAuthGate){visibility:hidden}
+html.auth-ok #siteAuthGate{display:none!important}
+#siteAuthGate{
+  position:fixed;inset:0;z-index:9999;background:#f5f2eb;
+  display:grid;place-items:center;padding:24px;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Helvetica Neue",Arial,sans-serif;
+}
+.site-auth-card{
+  width:min(420px,100%);background:#fffdf9;border:1px solid #dde2dc;
+  border-radius:22px;padding:24px;box-shadow:0 22px 60px rgba(20,31,29,.10)
+}
+.site-auth-eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#6c7672;font-weight:700}
+.site-auth-card h2{margin:8px 0 8px;font-size:30px;letter-spacing:-.04em;color:#17211f}
+.site-auth-card p{margin:0 0 18px;color:#6c7672;font-size:14px;line-height:1.55}
+.site-auth-row{display:flex;gap:10px}
+.site-auth-input{
+  flex:1;min-width:0;border:1px solid #dde2dc;background:#fff;border-radius:13px;
+  padding:12px 13px;font-size:16px;outline:none;color:#17211f
+}
+.site-auth-input:focus{border-color:#9aa8a3}
+.site-auth-btn{
+  border:0;border-radius:13px;background:#13211f;color:#fff;
+  padding:0 18px;font-size:14px;font-weight:700;min-height:46px;cursor:pointer
+}
+.site-auth-error{min-height:18px;margin-top:10px;color:#b24b42;font-size:12px}
+@media(max-width:520px){
+  .site-auth-card{padding:20px}
+  .site-auth-card h2{font-size:27px}
+  .site-auth-row{display:grid}
+  .site-auth-btn{width:100%;height:46px}
+}
+</style>
+
 </head>
 <body>
+
+<div id="siteAuthGate">
+  <div class="site-auth-card">
+    <div class="site-auth-eyebrow">US ROAD TRIP · 2026</div>
+    <h2>请输入访问密码</h2>
+    <p>此设备验证一次后会自动记住。</p>
+    <form id="siteAuthForm">
+      <div class="site-auth-row">
+        <input class="site-auth-input" id="siteAuthPassword" type="password" autocomplete="current-password" placeholder="Password" aria-label="访问密码">
+        <button class="site-auth-btn" type="submit">进入</button>
+      </div>
+      <div class="site-auth-error" id="siteAuthError" aria-live="polite"></div>
+    </form>
+  </div>
+</div>
+
 <section class="hero"><div class="hero-in"><div class="eyebrow">US ROAD TRIP · 2026</div><h1>California<br>to New York</h1><div class="sub">从洛杉矶出发，沿 Highway 1 北上，经硅谷与拉斯维加斯，最后抵达纽约。</div><div class="meta"><span class="pill">SEP 24 — OCT 06</span><span class="pill">13 DAYS</span><span class="pill">ROAD TRIP + CITY</span></div></div></section>
 <main>
 <nav class="mode-tabs" aria-label="旅行栏目">
@@ -240,6 +304,33 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
   });
 
   renderExpense();
+})();
+</script>
+
+<script id="site-auth-script">
+(function(){
+  if(document.documentElement.classList.contains('auth-ok')) return;
+  var form=document.getElementById('siteAuthForm');
+  var input=document.getElementById('siteAuthPassword');
+  var error=document.getElementById('siteAuthError');
+  function unlock(){
+    try{localStorage.setItem('us-trip-2026-auth','ok')}catch(e){}
+    document.documentElement.classList.remove('auth-locked');
+    document.documentElement.classList.add('auth-ok');
+    document.body.style.overflow='';
+  }
+  form.addEventListener('submit',function(e){
+    e.preventDefault();
+    if(input.value==='richfish'){
+      error.textContent='';
+      unlock();
+    }else{
+      error.textContent='密码不正确，请重新输入。';
+      input.value='';
+      input.focus();
+    }
+  });
+  setTimeout(function(){input.focus()},0);
 })();
 </script>
 
