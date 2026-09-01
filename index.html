@@ -55,10 +55,11 @@
 }
 </style>
 
+
 <script>
 (function(){
   try{
-    if(localStorage.getItem('us-trip-2026-auth')==='ok'){
+    if(localStorage.getItem('us-trip-2026-session')){
       document.documentElement.classList.add('auth-ok');
     }else{
       document.documentElement.classList.add('auth-locked');
@@ -190,9 +191,14 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 <script id="expense-module-script">
 (function(){
   const STORE='us-trip-2026-expenses-by-day-v2';
+  const MIGRATED='us-trip-2026-expenses-cloud-migrated-v1';
+  const API='https://dncezupptrncranshvon.supabase.co/functions/v1/trip-expenses';
+  const SESSION_KEY='us-trip-2026-session';
   let selectedIndex=0;
   let editing=false;
   let expenses={};
+  let deletedIds=[];
+  let syncing=false;
   try{expenses=JSON.parse(localStorage.getItem(STORE)||'{}')||{}}catch(e){expenses={}}
 
   const q=s=>document.querySelector(s);
@@ -204,16 +210,76 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 
   function key(){return DAYS[selectedIndex].day}
   function list(){return Array.isArray(expenses[key()])?expenses[key()]:[]}
-  function id(){return 'e_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
   function n(v){const x=Number(v);return Number.isFinite(x)?x:0}
   function money(v){return '¥'+n(v).toLocaleString('zh-CN',{maximumFractionDigits:2})}
   function safe(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
   function attr(v){return String(v??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;')}
-  function save(){
-    try{localStorage.setItem(STORE,JSON.stringify(expenses));toast('已保存到当前浏览器')}
-    catch(e){toast('当前预览环境无法保存')}
+  function cache(){try{localStorage.setItem(STORE,JSON.stringify(expenses))}catch(e){}}
+  function toast(text){const el=q('#expenseToast');el.textContent=text;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1700)}
+
+  async function api(method='GET',body){
+    let session='';try{session=localStorage.getItem(SESSION_KEY)||''}catch(e){}
+    const headers={'x-trip-session':session};
+    if(body!==undefined)headers['content-type']='application/json';
+    const res=await fetch(API,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});
+    let data={};
+    try{data=await res.json()}catch(e){}
+    if(!res.ok)throw new Error(data.error||('HTTP '+res.status));
+    return data;
   }
-  function toast(text){const el=q('#expenseToast');el.textContent=text;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1400)}
+
+  function fromCloud(rows){
+    const next={};
+    DAYS.forEach(d=>next[d.day]=[]);
+    (Array.isArray(rows)?rows:[]).forEach(r=>{
+      if(!next[r.day_key])next[r.day_key]=[];
+      next[r.day_key].push({id:r.id,name:r.item_name,cost:String(r.amount),sort_order:r.sort_order});
+    });
+    Object.keys(next).forEach(k=>next[k].sort((a,b)=>(a.sort_order??0)-(b.sort_order??0)));
+    expenses=next;cache();
+  }
+
+  async function fetchCloud(showToast=false){
+    const data=await api('GET');
+    fromCloud(data.expenses);
+    renderExpense();
+    if(showToast)toast('已从云端同步');
+  }
+
+  function localRowsSnapshot(){
+    const rows=[];
+    Object.entries(expenses).forEach(([day,arr])=>{
+      if(!Array.isArray(arr))return;
+      arr.forEach((x,i)=>{
+        const name=String(x.name||'').trim();
+        if(!name)return;
+        rows.push({day_key:day,item_name:name,amount:n(x.cost),sort_order:i});
+      });
+    });
+    return rows;
+  }
+
+  async function migrateLocalOnce(){
+    let done=false;
+    try{done=localStorage.getItem(MIGRATED)==='yes'}catch(e){}
+    if(done)return;
+    const localRows=localRowsSnapshot();
+    if(!localRows.length){try{localStorage.setItem(MIGRATED,'yes')}catch(e){};return}
+    for(const row of localRows)await api('POST',row);
+    try{localStorage.setItem(MIGRATED,'yes')}catch(e){}
+  }
+
+  async function initialSync(){
+    if(syncing)return;
+    syncing=true;
+    try{
+      await migrateLocalOnce();
+      await fetchCloud(false);
+    }catch(e){
+      cache();
+      toast('云端暂时无法连接，已使用本机缓存');
+    }finally{syncing=false}
+  }
 
   function totals(){
     const day=list().reduce((s,x)=>s+n(x.cost),0);
@@ -228,7 +294,6 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
     q('#expenseDateTitle').textContent=d.date;
     q('#expenseCity').textContent=d.city;
     editSaveBtn.textContent=editing?'保存':'编辑';
-
     if(!rows.length){
       q('#expenseList').innerHTML='<div class="expense-empty">当天还没有费用记录</div>';
     }else if(!editing){
@@ -247,6 +312,7 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
       row.querySelector('.expense-cost-input').addEventListener('input',e=>{const x=list().find(v=>v.id===rowId);if(x)x.cost=e.target.value;totals()});
       row.querySelector('.expense-delete').addEventListener('click',()=>{
         if(!confirm('删除这个费用项目？'))return;
+        if(rowId)deletedIds.push(rowId);
         expenses[key()]=list().filter(v=>v.id!==rowId);renderExpense();
       });
       row.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',rowId);e.dataTransfer.effectAllowed='move'});
@@ -261,74 +327,118 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
     });
   }
 
+  async function saveCurrentDay(){
+    const day=key(), rows=list();
+    editSaveBtn.disabled=true;
+    try{
+      for(const id of [...new Set(deletedIds)])await api('DELETE',{id});
+      deletedIds=[];
+      for(let i=0;i<rows.length;i++){
+        const x=rows[i];
+        await api('PATCH',{id:x.id,item_name:String(x.name||'').trim()||'未命名项目',amount:n(x.cost),sort_order:i});
+      }
+      if(rows.length)await api('POST',{action:'reorder',day_key:day,ordered_ids:rows.map(x=>x.id)});
+      cache();
+      await fetchCloud(false);
+      toast('已同步到云端');
+      return true;
+    }catch(e){
+      cache();
+      toast('同步失败，修改已保留在本机');
+      return false;
+    }finally{editSaveBtn.disabled=false}
+  }
+
   function setMode(mode){
     const expense=mode==='expense';
     tripTab.classList.toggle('active',!expense);
     expenseTab.classList.toggle('active',expense);
     shell.classList.toggle('is-hidden',expense);
     expenseView.classList.toggle('is-hidden',!expense);
-    editing=false;
-    if(expense)renderExpense();
+    editing=false;deletedIds=[];
+    if(expense){renderExpense();initialSync()}
   }
 
   tripTab.addEventListener('click',()=>setMode('trip'));
   expenseTab.addEventListener('click',()=>setMode('expense'));
-
   document.querySelectorAll('.dbtn').forEach((b,i)=>{
     b.addEventListener('click',()=>{
-      selectedIndex=i;
-      editing=false;
+      selectedIndex=i;editing=false;deletedIds=[];
       if(!expenseView.classList.contains('is-hidden'))renderExpense();
     });
   });
 
-  editSaveBtn.addEventListener('click',()=>{
-    if(!editing){editing=true;renderExpense();return}
-    save();editing=false;renderExpense();
+  editSaveBtn.addEventListener('click',async()=>{
+    if(!editing){editing=true;deletedIds=[];renderExpense();return}
+    const ok=await saveCurrentDay();
+    if(ok){editing=false;renderExpense()}
   });
 
   addBtn.addEventListener('click',()=>{
     newName.value='';newCost.value='';
     q('#expenseModalDate').textContent=DAYS[selectedIndex].date+' · '+DAYS[selectedIndex].city;
-    modal.classList.remove('is-hidden');
-    setTimeout(()=>newName.focus(),0);
+    modal.classList.remove('is-hidden');setTimeout(()=>newName.focus(),0);
   });
   q('#expenseCancelBtn').addEventListener('click',()=>modal.classList.add('is-hidden'));
   modal.addEventListener('click',e=>{if(e.target===modal)modal.classList.add('is-hidden')});
-  form.addEventListener('submit',e=>{
+  form.addEventListener('submit',async e=>{
     e.preventDefault();
     const name=newName.value.trim(), cost=newCost.value.trim();
     if(!name){newName.focus();return}
-    const arr=list().slice();arr.push({id:id(),name,cost});expenses[key()]=arr;
-    save();modal.classList.add('is-hidden');renderExpense();
+    const submit=form.querySelector('button[type="submit"]');submit.disabled=true;
+    try{
+      const data=await api('POST',{day_key:key(),item_name:name,amount:n(cost),sort_order:list().length});
+      const r=data.expense||{};
+      const arr=list().slice();arr.push({id:r.id,name:r.item_name||name,cost:String(r.amount??cost),sort_order:r.sort_order??arr.length});expenses[key()]=arr;
+      cache();modal.classList.add('is-hidden');renderExpense();toast('已同步到云端');
+    }catch(err){
+      toast('新增失败，请检查网络后重试');
+    }finally{submit.disabled=false}
   });
 
   renderExpense();
+  if(document.documentElement.classList.contains('auth-ok')) initialSync();
+  window.addEventListener('trip-auth-ready',()=>initialSync());
 })();
 </script>
 
+
 <script id="site-auth-script">
 (function(){
-  if(document.documentElement.classList.contains('auth-ok')) return;
+  var API='https://dncezupptrncranshvon.supabase.co/functions/v1/trip-expenses';
+  var SESSION_KEY='us-trip-2026-session';
   var form=document.getElementById('siteAuthForm');
   var input=document.getElementById('siteAuthPassword');
   var error=document.getElementById('siteAuthError');
+  var button=form.querySelector('button[type="submit"]');
   function unlock(){
-    try{localStorage.setItem('us-trip-2026-auth','ok')}catch(e){}
     document.documentElement.classList.remove('auth-locked');
     document.documentElement.classList.add('auth-ok');
     document.body.style.overflow='';
+    window.dispatchEvent(new Event('trip-auth-ready'));
   }
-  form.addEventListener('submit',function(e){
+  if(document.documentElement.classList.contains('auth-ok')){
+    window.dispatchEvent(new Event('trip-auth-ready'));
+    return;
+  }
+  form.addEventListener('submit',async function(e){
     e.preventDefault();
-    if(input.value==='richfish'){
-      error.textContent='';
+    var password=input.value;
+    if(!password)return;
+    error.textContent='';
+    button.disabled=true;
+    try{
+      var res=await fetch(API,{method:'POST',headers:{'content-type':'application/json','x-trip-password':password},body:JSON.stringify({action:'verify'})});
+      var data={};try{data=await res.json()}catch(_){}
+      if(!res.ok||!data.session)throw new Error('auth');
+      try{localStorage.setItem(SESSION_KEY,data.session);localStorage.removeItem('us-trip-2026-auth')}catch(_){}
+      input.value='';
       unlock();
-    }else{
-      error.textContent='密码不正确，请重新输入。';
+    }catch(err){
+      error.textContent='密码不正确，或网络暂时无法连接。';
       input.value='';
       input.focus();
-    }
+    }finally{button.disabled=false}
   });
   setTimeout(function(){input.focus()},0);
 })();
